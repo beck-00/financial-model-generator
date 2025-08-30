@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -16,6 +17,32 @@ from ....database.models import User, AuthCredentials, RefreshToken
 from ....schemas.user import UserCreate, User as UserSchema, Token, TokenRefresh
 
 router = APIRouter()
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+
+async def get_current_user(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise credentials_exception
+    return user
 
 @router.post("/register", response_model=UserSchema)
 def register(*, db: Session = Depends(get_db), user_in: UserCreate) -> Any:
@@ -121,3 +148,10 @@ def refresh_token(
         access_token=access_token,
         refresh_token=new_refresh_token
     )
+
+@router.get("/me", response_model=UserSchema)
+def read_current_user(
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """Get current user informaiton"""
+    return current_user
